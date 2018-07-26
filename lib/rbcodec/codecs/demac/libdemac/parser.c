@@ -156,6 +156,8 @@ int ape_parseheaderbuf(unsigned char* buf, struct ape_ctx_t* ape_ctx)
     ape_ctx->numseekpoints = APE_MAX(ape_ctx->maxseekpoints,
                                      ape_ctx->seektablelength / sizeof(int32_t));
 
+    if(ape_ctx->compressiontype > 3000)
+	    return -1;
     return 0;
 }
 
