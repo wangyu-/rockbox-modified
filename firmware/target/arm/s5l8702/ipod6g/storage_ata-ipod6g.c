@@ -45,6 +45,8 @@
 #define CEATA_DAT_NONBUSY_TIMEOUT 5000000
 #define CEATA_MMC_RCA 1
 
+#define TIMEOUT_EXPIRED2(a,b) TIMEOUT_EXPIRED(a,(b*2)) 
+
 
 /** static, private data **/
 static uint8_t ceata_taskfile[16] STORAGE_ALIGN_ATTR;
@@ -57,7 +59,7 @@ static struct mutex ata_mutex;
 static struct semaphore ata_wakeup;
 static uint32_t ata_dma_flags;
 static long ata_last_activity_value = -1;
-static long ata_sleep_timeout = 20 * HZ;
+static long ata_sleep_timeout = 20 * HZ * 2;
 static uint32_t ata_stack[(DEFAULT_STACK_SIZE + 0x400) / 4];
 static bool ata_powered;
 static const int ata_retries = ATA_RETRIES;
@@ -92,7 +94,7 @@ static int ata_wait_for_not_bsy(long timeout)
     {
         uint8_t csd = ata_read_cbr(&ATA_PIO_CSD);
         if (!(csd & BIT(7))) return 0;
-        if (TIMEOUT_EXPIRED(startusec, timeout)) RET_ERR(0);
+        if (TIMEOUT_EXPIRED2(startusec, timeout)) RET_ERR(0);
         yield();
     }
 }
@@ -105,7 +107,7 @@ static int ata_wait_for_rdy(long timeout)
     {
         uint8_t dad = ata_read_cbr(&ATA_PIO_DAD);
         if (dad & BIT(6)) return 0;
-        if (TIMEOUT_EXPIRED(startusec, timeout)) RET_ERR(1);
+        if (TIMEOUT_EXPIRED2(startusec, timeout)) RET_ERR(1);
         yield();
     }
 }
@@ -119,7 +121,7 @@ static int ata_wait_for_start_of_transfer(long timeout)
         uint8_t dad = ata_read_cbr(&ATA_PIO_DAD);
         if (dad & BIT(0)) RET_ERR(1);
         if ((dad & (BIT(7) | BIT(3))) == BIT(3)) return 0;
-        if (TIMEOUT_EXPIRED(startusec, timeout)) RET_ERR(2);
+        if (TIMEOUT_EXPIRED2(startusec, timeout)) RET_ERR(2);
         yield();
     }
 }
@@ -152,7 +154,7 @@ static bool mmc_send_command(uint32_t cmd, uint32_t arg, uint32_t* result, int t
     long starttime = USEC_TIMER;
     while ((SDCI_STATE & SDCI_STATE_CMD_STATE_MASK) != SDCI_STATE_CMD_STATE_CMD_IDLE)
     {
-        if (TIMEOUT_EXPIRED(starttime, timeout)) RET_ERR(0);
+        if (TIMEOUT_EXPIRED2(starttime, timeout)) RET_ERR(0);
         yield();
     }
     SDCI_STAC = SDCI_STAC_CLR_CMDEND | SDCI_STAC_CLR_BIT_3
@@ -170,23 +172,23 @@ static bool mmc_send_command(uint32_t cmd, uint32_t arg, uint32_t* result, int t
     if (!(SDCI_DSTA & SDCI_DSTA_CMDRDY)) RET_ERR(1);
     SDCI_CMD = cmd | SDCI_CMD_CMDSTR;
     long sleepbase = USEC_TIMER;
-    while (TIMEOUT_EXPIRED(sleepbase, 1000)) yield();
+    while (TIMEOUT_EXPIRED2(sleepbase, 1000)) yield();
     while (!(SDCI_DSTA & SDCI_DSTA_CMDEND))
     {
-        if (TIMEOUT_EXPIRED(starttime, timeout)) RET_ERR(2);
+        if (TIMEOUT_EXPIRED2(starttime, timeout)) RET_ERR(2);
         yield();
     }
     if ((cmd & SDCI_CMD_RES_TYPE_MASK) != SDCI_CMD_RES_TYPE_NONE)
     {
         while (!(SDCI_DSTA & SDCI_DSTA_RESEND))
         {
-            if (TIMEOUT_EXPIRED(starttime, timeout)) RET_ERR(3);
+            if (TIMEOUT_EXPIRED2(starttime, timeout)) RET_ERR(3);
             yield();
         }
         if (cmd & SDCI_CMD_RES_BUSY)
             while (SDCI_DSTA & SDCI_DSTA_DAT_BUSY)
             {
-                if (TIMEOUT_EXPIRED(starttime, CEATA_DAT_NONBUSY_TIMEOUT)) RET_ERR(4);
+                if (TIMEOUT_EXPIRED2(starttime, CEATA_DAT_NONBUSY_TIMEOUT)) RET_ERR(4);
                 yield();
             }
     }
@@ -215,7 +217,7 @@ static int mmc_init(void)
     uint32_t result;
     do
     {
-        if (TIMEOUT_EXPIRED(startusec, CEATA_POWERUP_TIMEOUT)) RET_ERR(1);
+        if (TIMEOUT_EXPIRED2(startusec, CEATA_POWERUP_TIMEOUT)) RET_ERR(1);
         sleep(HZ / 100);
         PASS_RC(mmc_send_command(SDCI_CMD_CMD_NUM(MMC_CMD_SEND_OP_COND)
                                | SDCI_CMD_CMD_TYPE_BCR | SDCI_CMD_RES_TYPE_R3
@@ -274,7 +276,7 @@ static int ceata_soft_reset(void)
     do
     {
         PASS_RC(mmc_fastio_read(0xf, &status), 2, 2);
-        if (TIMEOUT_EXPIRED(startusec, CEATA_POWERUP_TIMEOUT)) RET_ERR(3);
+        if (TIMEOUT_EXPIRED2(startusec, CEATA_POWERUP_TIMEOUT)) RET_ERR(3);
         sleep(HZ / 100);
     }
     while (status & 0x80);
@@ -352,7 +354,7 @@ static int ceata_write_multiple_register(uint32_t addr, void* dest, uint32_t siz
         == OBJ_WAIT_TIMEDOUT) RET_ERR(2);
     while ((SDCI_STATE & SDCI_STATE_DAT_STATE_MASK) != SDCI_STATE_DAT_STATE_IDLE)
     {
-        if (TIMEOUT_EXPIRED(startusec, CEATA_COMMAND_TIMEOUT)) RET_ERR(3);
+        if (TIMEOUT_EXPIRED2(startusec, CEATA_COMMAND_TIMEOUT)) RET_ERR(3);
         yield();
     }
     PASS_RC(mmc_dsta_check_data_success(), 3, 4);
@@ -416,7 +418,7 @@ static int ceata_wait_idle(void)
         uint32_t status;
         PASS_RC(mmc_fastio_read(0xf, &status), 1, 0);
         if (!(status & 0x88)) return 0;
-        if (TIMEOUT_EXPIRED(startusec, CEATA_DAT_NONBUSY_TIMEOUT)) RET_ERR(1);
+        if (TIMEOUT_EXPIRED2(startusec, CEATA_DAT_NONBUSY_TIMEOUT)) RET_ERR(1);
         sleep(HZ / 20);
     }
 }
